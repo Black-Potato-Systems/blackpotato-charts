@@ -8,6 +8,7 @@ This document tracks pending features, documentation gaps, and decisions to be m
 |----------|--------|----------|
 | Core Deployment | Complete | - |
 | Backup System (pgBackRest) |  Complete | - |
+| Backup System testing |  pending | - |
 | Basic Documentation |  Complete | - |
 | Recovery Guide |  Pending |  |
 | Detailed Values Documentation | Pending |  |
@@ -15,3 +16,4 @@ This document tracks pending features, documentation gaps, and decisions to be m
 | Legacy Backup Decision | Decision Required |  |
 
 ---
+

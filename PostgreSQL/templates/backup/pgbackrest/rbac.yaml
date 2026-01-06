@@ -1,0 +1,34 @@
+{{- if .Values.pgbackrest.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "postgresql.fullname" . }}-pgbackrest
+subjects:
+- kind: ServiceAccount
+  name: {{ include "postgresql.fullname" . }}-pgbackrest
+  namespace: {{ .Release.Namespace }}
+{{- end }}

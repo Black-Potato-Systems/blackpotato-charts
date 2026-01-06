@@ -1,0 +1,97 @@
+{{- if and .Values.pgbackrest.enabled .Values.pgbackrest.hooks.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest-init
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "postgresql.selectorLabels" . | nindent 8 }}
+        job: pgbackrest-init
+    spec:
+      restartPolicy: OnFailure
+
+      {{- if .Values.pgbackrest.s3.enabled }}
+      serviceAccountName: {{ include "postgresql.fullname" . }}-pgbackrest
+      {{- end }}
+
+      containers:
+        - name: pgbackrest-init
+          image: bitnami/kubectl:latest
+          imagePullPolicy: IfNotPresent
+
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              value: {{ include "postgresql.fullname" . }}-0
+
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -Eeuo pipefail
+
+              echo "=== pgBackRest Initialization Started: $(date) ==="
+
+              # Wait for PostgreSQL pod to be ready
+              echo "Waiting for PostgreSQL pod to be ready..."
+              for i in {1..60}; do
+                if kubectl get pod -n "$NAMESPACE" "$POD_NAME" 2>/dev/null | grep -q "Running"; then
+                  echo "PostgreSQL pod is running"
+                  break
+                fi
+                echo "Waiting... ($i/60)"
+                sleep 2
+              done
+
+              # Give pod a moment to fully initialize
+              sleep 5
+
+              echo "Checking pgBackRest stanza status..."
+              if kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest --stanza=main check 2>/dev/null; then
+                echo "Stanza already exists and is valid"
+              else
+                echo "Creating pgBackRest stanza"
+                kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest --stanza=main stanza-create
+              fi
+
+              echo "Checking for existing valid backups..."
+
+              # Get info output and check for backup presence
+              INFO_OUTPUT=$(kubectl exec -n "$NAMESPACE" "$POD_NAME" -- \
+                pgbackrest info --stanza=main --no-repo1-storage-verify-tls 2>/dev/null || true)
+
+              if echo "$INFO_OUTPUT" | grep -q "backup:" && [ "$(echo "$INFO_OUTPUT" | grep -c 'backup:.*ok')" -gt 0 ]; then
+                echo "Valid backup already exists — skipping initial full backup"
+              else
+                echo "No valid backup found — running initial FULL backup"
+                kubectl exec -n "$NAMESPACE" "$POD_NAME" -- \
+                  pgbackrest backup \
+                  --stanza=main \
+                  --type=full \
+                  --no-repo1-storage-verify-tls \
+                  --log-level-console=info
+              fi
+
+
+              echo "=== Initialization Complete: $(date) ==="
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+{{- end }}

@@ -1,0 +1,159 @@
+{{- if .Values.pgbackrest.enabled }}
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest-full
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.pgbackrest.backup.fullSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+
+      template:
+        metadata:
+          labels:
+            {{- include "postgresql.selectorLabels" . | nindent 12 }}
+            job: pgbackrest-full
+        spec:
+          restartPolicy: OnFailure
+
+          {{- if .Values.pgbackrest.s3.enabled }}
+          serviceAccountName: {{ include "postgresql.fullname" . }}-pgbackrest
+          {{- end }}
+
+          containers:
+            - name: pgbackrest-full
+              image: bitnami/kubectl:latest
+              imagePullPolicy: IfNotPresent
+
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_NAME
+                  value: {{ include "postgresql.fullname" . }}-0
+                - name: RELEASE_NAME
+                  value: {{ .Release.Name }}
+
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -Eeuo pipefail
+
+                  echo "=== Full Backup Started: $(date) ==="
+
+                  echo "Running FULL backup"
+                  kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest backup \
+                    --stanza=main \
+                    --type=full \
+                    --log-level-console=info
+
+                  BACKUP_EXIT=$?
+
+                  if [ $BACKUP_EXIT -eq 0 ]; then
+                    echo "=== Backup Succeeded ==="
+                    kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest info --stanza=main
+                  else
+                    echo "=== Backup Failed with code $BACKUP_EXIT ==="
+                    exit $BACKUP_EXIT
+                  fi
+
+                  echo "=== Full Backup Completed: $(date) ==="
+
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+
+---
+{{- if .Values.pgbackrest.backup.incrementalSchedule }}
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest-incr
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.pgbackrest.backup.incrementalSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+
+      template:
+        metadata:
+          labels:
+            {{- include "postgresql.selectorLabels" . | nindent 12 }}
+            job: pgbackrest-incr
+        spec:
+          restartPolicy: OnFailure
+
+          {{- if .Values.pgbackrest.s3.enabled }}
+          serviceAccountName: {{ include "postgresql.fullname" . }}-pgbackrest
+          {{- end }}
+
+          containers:
+            - name: pgbackrest-incr
+              image: bitnami/kubectl:latest
+              imagePullPolicy: IfNotPresent
+
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_NAME
+                  value: {{ include "postgresql.fullname" . }}-0
+
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -Eeuo pipefail
+
+                  echo "=== Incremental Backup Started: $(date) ==="
+
+                  echo "Running INCREMENTAL backup"
+                  kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest backup \
+                    --stanza=main \
+                    --type=incr \
+                    --log-level-console=info
+
+                  BACKUP_EXIT=$?
+
+                  if [ $BACKUP_EXIT -eq 0 ]; then
+                    echo "=== Backup Succeeded ==="
+                    kubectl exec -n "$NAMESPACE" "$POD_NAME" -- pgbackrest info --stanza=main
+                  else
+                    echo "=== Backup Failed with code $BACKUP_EXIT ==="
+                    exit $BACKUP_EXIT
+                  fi
+
+                  echo "=== Incremental Backup Completed: $(date) ==="
+
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+
+{{- end }}
+{{- end }}

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "postgresql.fullname" . }}-config
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+data:
+  postgresql.conf: |
+    # PostgreSQL Configuration
+    listen_addresses = '*'
+    max_connections = {{ .Values.postgresql.config.maxConnections }}
+    shared_buffers = {{ .Values.postgresql.config.sharedBuffers }}
+    effective_cache_size = {{ .Values.postgresql.config.effectiveCacheSize }}
+    maintenance_work_mem = {{ .Values.postgresql.config.maintenanceWorkMem }}
+    checkpoint_completion_target = {{ .Values.postgresql.config.checkpointCompletionTarget }}
+    wal_buffers = {{ .Values.postgresql.config.walBuffers }}
+    default_statistics_target = {{ .Values.postgresql.config.defaultStatisticsTarget }}
+    random_page_cost = {{ .Values.postgresql.config.randomPageCost }}
+    effective_io_concurrency = {{ .Values.postgresql.config.effectiveIoConurrency }}
+    work_mem = {{ .Values.postgresql.config.workMem }}
+    min_wal_size = {{ .Values.postgresql.config.minWalSize }}
+    max_wal_size = {{ .Values.postgresql.config.maxWalSize }}
+    log_min_duration_statement = 1000
+    log_connections = on
+    log_disconnections = on
+    
+    # WAL Archiving (pgBackRest)
+    wal_level = 'replica'
+    archive_mode = on
+    archive_command = 'pgbackrest --stanza=main archive-push %p'
+    archive_timeout = 60

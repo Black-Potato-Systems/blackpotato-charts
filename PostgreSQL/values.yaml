@@ -1,0 +1,179 @@
+# PostgreSQL Helm Chart Values
+# Default values for PostgreSQL deployment
+
+replicaCount: 1
+
+image:
+  repository: aryan/postgres-pgbackrest
+  pullPolicy: Never
+  tag: "15.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# PostgreSQL Configuration
+postgresql:
+  username: postgres
+  password: "postgres123"  # CHANGE THIS IN PRODUCTION
+  database: myapp
+  
+  # PostgreSQL parameters
+  config:
+    maxConnections: "100"
+    sharedBuffers: "256MB"
+    effectiveCacheSize: "1GB"
+    maintenanceWorkMem: "64MB"
+    checkpointCompletionTarget: "0.9"
+    walBuffers: "16MB"
+    defaultStatisticsTarget: "100"
+    randomPageCost: "1.1"
+    effectiveIoConurrency: "200"
+    workMem: "4MB"
+    minWalSize: "1GB"
+    maxWalSize: "4GB"
+
+# Storage Configuration
+persistence:
+  enabled: true
+  storageClass: ""  # Use default storage class
+  size: 10Gi
+  mountPath: /var/lib/postgresql/data
+
+# Service Configuration
+service:
+  type: ClusterIP
+  port: 5432
+  targetPort: 5432
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Node affinity and tolerations
+affinity: {}
+tolerations: []
+nodeSelector: {}
+
+# Liveness and Readiness probes
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  fsGroup: 999
+
+# Pod security policy
+podSecurityPolicy:
+  enabled: false
+
+# pgBackRest Configuration
+pgbackrest:
+  enabled: false
+  image:
+    repository: aryan/pgbackrest
+    tag: 2.57
+    pullPolicy: Never
+    # pullPolicy is optional; defaults to IfNotPresent in templates
+    # pullPolicy: IfNotPresent
+  # Indicates whether the pgBackRest client binary is available in the Postgres Pod
+  client:
+    present: true
+    binaryPath: "/usr/bin/pgbackrest"
+  
+  # Helm hooks for automated stanza creation and archiving activation
+  hooks:
+    enabled: true  # Set to false to skip post-install/post-upgrade hooks
+  
+  restore:
+    enabled: false
+  # Backup settings
+  backup:
+    fullSchedule: "0 2 * * 0"        # Full backup: Sunday at 2 AM
+    incrementalSchedule: "0 2 * * 1-6"  # Incremental: Mon-Sat at 2 AM
+    differentialSchedule: ""          # Differential backup schedule (optional)
+    type: "incr"                      # Default backup type (full, incr, diff)
+    retention: 30                     # Days to retain backups
+    retentionFull: 7                  # Full backups to keep
+    
+  # Compression settings
+  compression: "gz"                   # Compression type: gz, bz2, lz4, zst
+  compressionLevel: 6                 # Compression level (1-9)
+  
+  # WAL Archiving
+  walArchiving:
+    enabled: true
+    asyncArchive: false               # Async WAL archiving
+    retentionDays: 30                 # Retain WAL files
+  
+  # S3 Repository Configuration
+  s3:
+    enabled: false
+    bucket: ""                        # S3 bucket name
+    region: "us-east-1"
+    path: "/pgbackrest"               # Path prefix in S3
+    endpoint: ""                      # S3 endpoint (for MinIO, etc)
+    storageClass: "STANDARD"          # S3 storage class
+
+    # TLS settings for HTTPS endpoints 
+    tls:
+      enabled: true                   # Enable if MinIO is exposed via HTTPS
+      caSecret:
+        name: "minio-tls"                      # Name of the Secret holding the CA cert (e.g., minio-tls)
+        key: tls.crt                   # Key within the Secret containing the CA certificate
+        namespace: "minio"                 # Namespace where the CA Secret resides (e.g., minio)
+    
+    # AWS Credentials
+    credentials:
+      accessKeyId: ""
+      secretAccessKey: ""
+  
+  # Repository settings
+  repo:
+    hardlink: true                    # Use hardlinks for backups (saves space)
+    bundleRaw: false                  # Bundle raw files for efficiency
+    blockSize: 32768                  # Block size for backup
+  
+  # Logging
+  logLevel: "info"                    # Log level: debug, info, warn, error
+  
+  # Performance tuning
+  parallelProcess: 4                  # Number of parallel processes
+  processMax: 8                       # Max processes allowed
+
+# Legacy backup configuration (pg_dumpall - kept for backward compatibility)
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  retention: 7
+  
+  s3:
+    enabled: false
+    bucket: ""
+    region: "us-east-1"
+    prefix: "postgresql-backups"
+    endpoint: ""
+    
+    credentials:
+      accessKeyId: ""
+      secretAccessKey: ""
+  
+  compressionLevel: 9
+  fullBackupSchedule: "0 2 * * *"
+  retentionDays: 7

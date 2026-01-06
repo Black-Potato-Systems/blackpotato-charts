@@ -1,0 +1,242 @@
+{{- if .Values.pgbackrest.restore.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest-restore-{{ .Release.Revision }}
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+  annotations:
+    description: "Manual job for pgBackRest PITR restore. Modify parameters before running."
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "postgresql.selectorLabels" . | nindent 8 }}
+        job: pgbackrest-restore
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      
+      {{- if .Values.pgbackrest.s3.enabled }}
+      serviceAccountName: {{ include "postgresql.fullname" . }}-pgbackrest
+      {{- end }}
+      
+      containers:
+      - name: pgbackrest-restore
+        image: "{{ .Values.pgbackrest.image.repository }}:{{ .Values.pgbackrest.image.tag }}"
+        imagePullPolicy: {{ .Values.pgbackrest.image.pullPolicy | default "IfNotPresent" }}
+        
+        {{- if .Values.pgbackrest.s3.enabled }}
+        envFrom:
+        - secretRef:
+            name: {{ include "postgresql.fullname" . }}-pgbackrest-s3
+        {{- end }}
+        
+        env:
+        - name: PGBACKREST_CONFIG
+          value: /etc/pgbackrest/pgbackrest.conf
+        - name: PGBACKREST_LOG_PATH
+          value: /var/log/pgbackrest
+        - name: PGBACKREST_LOCK_PATH
+          value: /var/run/pgbackrest
+        - name: PGBACKREST_STANZA
+          value: main
+        # PITR Parameters - modify these for recovery
+        - name: PGBACKREST_RECOVERY_TYPE
+          value: "immediate"  # Options: immediate, time, name, xid, lsn
+        # - name: PGBACKREST_RECOVERY_TARGET
+        #   value: "2024-12-18 12:00:00"  # For time-based recovery
+        # - name: PGBACKREST_RECOVERY_TARGET_NAME
+        #   value: "my_savepoint"  # For named savepoint recovery
+        # - name: PGBACKREST_RECOVERY_TARGET_XID
+        #   value: "1000000"  # For transaction ID recovery
+        # - name: PGBACKREST_RECOVERY_TARGET_LSN
+        #   value: "0/12345678"  # For log sequence number recovery
+        - name: PGBACKREST_RECOVERY_TARGET_INCLUSIVE
+          value: "true"  # Include the target time/xid
+        - name: PGBACKREST_RECOVERY_TIMELINE
+          value: "latest"  # Options: default, promote, latest
+        
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          
+          echo "⚠️  WARNING: This job performs Point-In-Time Recovery (PITR)"
+          echo "This will RESTORE the database to a specific point in time."
+          echo "Current recovery target: $PGBACKREST_RECOVERY_TYPE"
+          echo ""
+          
+          # Step 1: Restore from backup
+          echo "Step 1: Restoring backup..."
+          pgbackrest restore --stanza=main \
+            --recovery-option='recovery_target_inclusive={{ .Values.pgbackrest.walArchiving.enabled | ternary "true" "off" }}' \
+            --recovery-option='recovery_target_timeline=latest'
+          
+          # Step 2: Modify recovery.conf if needed
+          echo "Step 2: Configuring recovery parameters..."
+          cat >> /var/lib/postgresql/data/pgdata/recovery.conf << EOF
+          # Recovery Parameters
+          recovery_target_inclusive = on
+          recovery_target_timeline = 'latest'
+          EOF
+          
+          echo "✅ Restore preparation complete!"
+          echo ""
+          echo "Next steps:"
+          echo "1. Verify recovery.conf configuration"
+          echo "2. PostgreSQL will recover on next startup"
+          echo "3. Monitor logs: kubectl logs -f <pod-name>"
+          echo "4. After recovery, remove recovery.conf and restart PostgreSQL"
+          echo ""
+          echo "To monitor recovery progress:"
+          echo "kubectl logs -f {{ include "postgresql.fullname" . }}-0"
+        
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 512Mi
+        
+        volumeMounts:
+        - name: postgresql-storage
+          mountPath: /var/lib/postgresql/data
+        - name: pgbackrest-log
+          mountPath: /var/log/pgbackrest
+        - name: pgbackrest-config
+          mountPath: /etc/pgbackrest
+          readOnly: true
+      
+      volumes:
+      - name: postgresql-storage
+        persistentVolumeClaim:
+          claimName: {{ include "postgresql.fullname" . }}-0-postgresql-storage
+      - name: pgbackrest-log
+        emptyDir: {}
+      - name: pgbackrest-config
+        configMap:
+          name: {{ include "postgresql.fullname" . }}-pgbackrest-config
+          defaultMode: 0755
+      
+      restartPolicy: Never
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "postgresql.fullname" . }}-recovery-instructions
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+data:
+  RESTORE_GUIDE.md: |
+    # pgBackRest Point-In-Time Recovery (PITR) Guide
+    
+    ## Overview
+    This chart includes pgBackRest for automated backups and PITR capabilities.
+    
+    ## Recovery Scenarios
+    
+    ### 1. Restore to Latest Backup
+    ```bash
+    kubectl delete job {{ include "postgresql.fullname" . }}-pgbackrest-restore-*
+    kubectl create job --from=cronjob/{{ include "postgresql.fullname" . }}-pgbackrest-backup \
+      {{ include "postgresql.fullname" . }}-restore-latest
+    ```
+    
+    ### 2. Restore to Specific Time (PITR)
+    Edit the recovery job environment variables:
+    - PGBACKREST_RECOVERY_TYPE=time
+    - PGBACKREST_RECOVERY_TARGET=2024-12-18 14:30:00
+    
+    ### 3. Restore to Transaction ID (XID)
+    - PGBACKREST_RECOVERY_TYPE=xid
+    - PGBACKREST_RECOVERY_TARGET_XID=1000000
+    
+    ### 4. Restore to Named Savepoint
+    - PGBACKREST_RECOVERY_TYPE=name
+    - PGBACKREST_RECOVERY_TARGET_NAME=my_savepoint
+    
+    ## Steps to Perform Recovery
+    
+    1. **List available backups:**
+       ```bash
+       kubectl exec {{ include "postgresql.fullname" . }}-0 -- \
+         pgbackrest info --stanza=main
+       ```
+    
+    2. **Stop PostgreSQL (optional for safer recovery):**
+       ```bash
+       kubectl scale statefulset {{ include "postgresql.fullname" . }} --replicas=0
+       ```
+    
+    3. **Create recovery job with desired parameters:**
+       ```bash
+       kubectl apply -f recovery-job.yaml
+       ```
+    
+    4. **Monitor recovery progress:**
+       ```bash
+       kubectl logs -f <recovery-pod-name>
+       ```
+    
+    5. **Start PostgreSQL:**
+       ```bash
+       kubectl scale statefulset {{ include "postgresql.fullname" . }} --replicas=1
+       ```
+    
+    6. **Verify recovery:**
+       ```bash
+       kubectl exec {{ include "postgresql.fullname" . }}-0 -- psql -U {{ .Values.postgresql.username }} -c "SELECT now();"
+       ```
+    
+    ## Backup Information
+    
+    View all available backups:
+    ```bash
+    kubectl exec {{ include "postgresql.fullname" . }}-0 -- pgbackrest info --stanza=main
+    ```
+    
+    Example output:
+    ```
+    stanza: main
+        status: ok
+        db (current) {
+            db-id: 1234567890, ver: 15.0
+            backup: full-20241218-020000F
+                timestamp start/stop: 2024-12-18 02:00:00 / 2024-12-18 02:15:00
+                wal retained: 000000010000000000000001-000000010000000000000005
+    
+            backup: incr-20241218-080000I
+                timestamp start/stop: 2024-12-18 08:00:00 / 2024-12-18 08:05:00
+                parent: full-20241218-020000F
+        }
+    ```
+    
+    ## Troubleshooting
+    
+    ### Recovery fails with "stanza not found"
+    - Ensure PostgreSQL is running
+    - Check stanza creation: `pgbackrest stanza-create --stanza=main --force`
+    
+    ### Recovery timeout
+    - Increase job timeout
+    - Check backup repository accessibility
+    - Verify S3 credentials
+    
+    ### Database still using old data after recovery
+    - Ensure recovery.conf is present in data directory
+    - Delete recovery.conf after recovery completes
+    - Restart PostgreSQL pod
+    
+    ## Retention Policy
+    
+    - Full backups: {{ .Values.pgbackrest.backup.retentionFull }} retained
+    - WAL files: {{ .Values.pgbackrest.walArchiving.retentionDays }} days
+    - Incremental backups: 7 days
+{{- end }}

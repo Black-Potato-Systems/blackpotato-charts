@@ -1,0 +1,34 @@
+1. Get the PostgreSQL connection details:
+
+   Host: {{ include "postgresql.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+   Port: {{ .Values.service.port }}
+   Database: {{ .Values.postgresql.database }}
+   Username: {{ .Values.postgresql.username }}
+
+2. Get the PostgreSQL password:
+
+   kubectl get secret --namespace {{ .Release.Namespace }} {{ include "postgresql.fullname" . }} -o jsonpath="{.data.password}" | base64 --decode ; echo
+
+3. Connect to PostgreSQL from a pod:
+
+   kubectl run -it --rm debug --image=postgres:15.0 --restart=Never -- \
+     psql -h {{ include "postgresql.fullname" . }}.{{ .Release.Namespace }} \
+     -U {{ .Values.postgresql.username }} \
+     -d {{ .Values.postgresql.database }}
+
+4. Port forward to access PostgreSQL locally:
+
+   kubectl port-forward svc/{{ include "postgresql.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.targetPort }} -n {{ .Release.Namespace }}
+
+   Then connect with:
+   psql -h localhost -U {{ .Values.postgresql.username }} -d {{ .Values.postgresql.database }}
+
+5. View logs:
+
+   kubectl logs -f {{ include "postgresql.fullname" . }}-0 -n {{ .Release.Namespace }}
+
+6. Monitor resource usage:
+
+   kubectl top pod {{ include "postgresql.fullname" . }}-0 -n {{ .Release.Namespace }}
+
+For more information, visit: https://www.postgresql.org/docs/

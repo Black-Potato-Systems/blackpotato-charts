@@ -1,0 +1,40 @@
+{{- if .Values.pgbackrest.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "postgresql.fullname" . }}-pgbackrest-config
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+data:
+  pgbackrest.conf: |
+    [global]
+    repo1-type=s3
+    repo1-path=/pgbackrest
+    repo1-s3-bucket={{ .Values.pgbackrest.s3.bucket }}
+    repo1-s3-region={{ .Values.pgbackrest.s3.region }}
+    repo1-s3-endpoint={{ .Values.pgbackrest.s3.endpoint }}
+    repo1-s3-uri-style=path
+    repo1-s3-key=${PGBACKREST_REPO1_S3_KEY}
+    repo1-s3-key-secret=${PGBACKREST_REPO1_S3_KEY_SECRET}
+    repo1-s3-verify-tls=n
+
+    repo1-retention-full={{ .Values.pgbackrest.backup.retentionFull }}
+    repo1-retention-archive={{ .Values.pgbackrest.walArchiving.retentionDays }}
+
+    compress-type={{ .Values.pgbackrest.compression }}
+    compress-level={{ .Values.pgbackrest.compressionLevel }}
+
+    process-max={{ .Values.pgbackrest.parallelProcess }}
+    archive-check=y
+    log-level-console=info
+    log-level-file=info
+    log-path=/var/log/pgbackrest
+
+    [main]
+    # Local mode: pgBackRest reads PostgreSQL files directly from disk
+    pg1-path=/var/lib/postgresql/data/pgdata
+    pg1-port=5432
+    pg1-user={{ .Values.postgresql.username }}
+
+
+{{- end }}

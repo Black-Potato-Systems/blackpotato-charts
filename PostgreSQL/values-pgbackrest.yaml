@@ -1,0 +1,57 @@
+postgresql:
+  username: testuser
+  password: testpass
+  database: testdb
+
+persistence:
+  enabled: true
+  size: 1Gi
+
+image:
+  repository: aryan/postgres-pgbackrest
+  tag: "15.0"
+  pullPolicy: IfNotPresent
+
+pgbackrest:
+  enabled: true
+
+  # REQUIRED because WAL archiving is enabled
+  client:
+    present: true
+
+  restore:
+    enabled: false
+
+  backup:
+    fullSchedule: "0 2 * * 0"
+    incrementalSchedule: "0 2 * * 1-6"
+    type: "incr"
+    retention: 30
+    retentionFull: 7
+
+  compression: "gz"
+  compressionLevel: 6
+
+  walArchiving:
+    enabled: true
+    asyncArchive: false
+    retentionDays: 30
+
+  s3:
+    enabled: true
+    bucket: pg-backups
+    endpoint: https://minio.minio.svc.cluster.local:9000
+    region: us-east-1
+    path: /pgbackrest
+    credentials:
+      accessKeyId: minioadmin
+      secretAccessKey: minioadmin123
+
+  repo:
+    hardlink: true
+    bundleRaw: false
+    blockSize: 32768
+
+  logLevel: info
+  parallelProcess: 4
+  processMax: 8

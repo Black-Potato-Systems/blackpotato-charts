@@ -1,0 +1,236 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                 PostgreSQL HELM CHART - QUICK REFERENCE                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📁 CHART STRUCTURE
+═════════════════════════════════════════════════════════════════════════════════
+
+postgresql-helm-chart/
+├── Chart.yaml                          # Chart metadata & version
+├── values.yaml                         # Configuration defaults
+├── README.md                           # Main documentation
+├── PGBACKREST_GUIDE.md                 # Backup & recovery guide
+├── QUICK_REFERENCE.txt                 # This file
+└── templates/
+    ├── NOTES.txt                       # Post-install notes
+    ├── _helpers.tpl                    # Template helpers
+    ├── database/                       # Core PostgreSQL resources
+    │   ├── statefulset.yaml           # PostgreSQL StatefulSet
+    │   ├── service.yaml               # Service (ClusterIP:5432)
+    │   ├── secret.yaml                # DB credentials
+    │   └── configmap.yaml             # PostgreSQL config
+    └── backup/                         # Backup solutions
+        ├── legacy/                     # pg_dumpall backups
+        │   ├── cronjob.yaml           # Backup CronJob
+        │   ├── s3-secret.yaml         # S3 credentials
+        │   └── serviceaccount.yaml    # Backup permissions
+        └── pgbackrest/                 # pgBackRest PITR
+            ├── config.yaml            # pgBackRest configuration
+            ├── cronjob.yaml           # Backup CronJobs
+            ├── s3-secret.yaml         # S3 credentials
+            ├── rbac.yaml              # RBAC permissions
+            └── recovery-job.yaml      # PITR recovery template
+
+
+🚀 QUICK START COMMANDS
+═════════════════════════════════════════════════════════════════════════════════
+
+1️⃣  MINIMAL INSTALL
+    helm install postgresql ./postgresql-helm-chart
+
+2️⃣  WITH pgBackRest + S3
+    helm install postgresql ./postgresql-helm-chart \
+      --set pgbackrest.enabled=true \
+      --set pgbackrest.s3.enabled=true \
+      --set pgbackrest.s3.bucket="my-backups" \
+      --set pgbackrest.s3.credentials.accessKeyId="KEY" \
+      --set pgbackrest.s3.credentials.secretAccessKey="SECRET"
+
+3️⃣  PRODUCTION SETUP
+    helm install postgresql ./postgresql-helm-chart \
+      -f values-production.yaml
+
+4️⃣  CHECK STATUS
+    helm status postgresql
+    kubectl get pods -l app.kubernetes.io/name=postgresql
+    kubectl get cronjob | grep pgbackrest
+
+5️⃣  VIEW NOTES
+    helm get notes postgresql
+
+
+📋 KEY CONFIGURATION OPTIONS
+═════════════════════════════════════════════════════════════════════════════════
+
+PostgreSQL:
+  --set postgresql.password="YOUR_PASSWORD"
+  --set postgresql.database="myapp"
+  --set postgresql.username="postgres"
+
+Storage:
+  --set persistence.enabled=true
+  --set persistence.size="10Gi"
+  --set persistence.storageClass="ebs-fast"
+
+Resources:
+  --set resources.requests.memory="512Mi"
+  --set resources.requests.cpu="250m"
+  --set resources.limits.memory="2Gi"
+  --set resources.limits.cpu="1000m"
+
+pgBackRest:
+  --set pgbackrest.enabled=true
+  --set pgbackrest.s3.enabled=true
+  --set pgbackrest.s3.bucket="backups"
+  --set pgbackrest.backup.fullSchedule="0 2 * * 0"
+  --set pgbackrest.compression="zst"
+
+
+🔄 COMMON OPERATIONS
+═════════════════════════════════════════════════════════════════════════════════
+
+BACKUP MANAGEMENT:
+  # View backups
+  kubectl exec postgresql-0 -- pgbackrest info --stanza=main
+
+  # Create full backup
+  kubectl exec postgresql-0 -- pgbackrest backup --stanza=main --type=full
+
+  # Create incremental backup
+  kubectl exec postgresql-0 -- pgbackrest backup --stanza=main --type=incr
+
+DATABASE ACCESS:
+  # Port forward
+  kubectl port-forward svc/postgresql 5432:5432
+  psql -h localhost -U postgres
+
+  # From another pod
+  kubectl run -it --rm psql --image=postgres -- \
+    psql -h postgresql.default.svc.cluster.local -U postgres
+
+RECOVERY:
+  # Restore to latest backup
+  kubectl exec postgresql-0 -- pgbackrest restore --stanza=main
+
+  # Point-In-Time Recovery
+  kubectl exec postgresql-0 -- pgbackrest restore --stanza=main \
+    --recovery-option='recovery_target_type=time' \
+    --recovery-option='recovery_target="2024-12-18 14:30:00"'
+
+MONITORING:
+  # View logs
+  kubectl logs -f postgresql-0
+
+  # Check events
+  kubectl get events | grep postgresql
+
+  # Check backup jobs
+  kubectl get jobs | grep backup
+
+
+💾 BACKUP STRATEGIES
+═════════════════════════════════════════════════════════════════════════════════
+
+STRATEGY 1: pg_dumpall (Simple, Full Dumps)
+  ✓ Full database dumps
+  ✓ Simple to restore
+  ✓ Larger backup sizes
+  ✗ No PITR capability
+  
+  Enable: --set backup.enabled=true --set backup.s3.enabled=true
+
+STRATEGY 2: pgBackRest (Advanced, PITR)
+  ✓ Full + incremental backups
+  ✓ Point-In-Time Recovery
+  ✓ WAL archiving
+  ✓ Efficient storage
+  ✓ Faster restore
+  
+  Enable: --set pgbackrest.enabled=true --set pgbackrest.s3.enabled=true
+
+BEST PRACTICE: Use pgBackRest for production environments
+
+
+🔐 SECURITY BEST PRACTICES
+═════════════════════════════════════════════════════════════════════════════════
+
+✓ Use strong PostgreSQL password
+✓ Store S3 credentials in Kubernetes Secrets
+✓ Use IAM policies for least privilege S3 access
+✓ Enable S3 encryption (AES256)
+✓ Run containers as non-root (UID 999)
+✓ Use ResourceQuotas to limit resource consumption
+✓ Enable network policies if needed
+✓ Regular backup testing
+✓ Monitor backup job success
+
+
+🔧 TROUBLESHOOTING QUICK TIPS
+═════════════════════════════════════════════════════════════════════════════════
+
+Pod won't start:
+  kubectl describe pod postgresql-0
+  kubectl logs postgresql-0
+
+S3 credentials not working:
+  kubectl get secret postgresql-pgbackrest-s3 -o yaml
+  kubectl exec postgresql-0 -- aws s3 ls s3://bucket/
+
+Backup job failing:
+  kubectl get cronjob
+  kubectl get jobs | grep backup
+  kubectl logs <job-pod-name>
+
+Connection refused:
+  kubectl port-forward svc/postgresql 5432:5432
+  kubectl get svc postgresql
+
+
+📚 DOCUMENTATION FILES
+═════════════════════════════════════════════════════════════════════════════════
+
+README.md                 - Overview, architecture, implementation summary
+DEPLOYMENT_GUIDE.md       - Installation steps, examples, verification
+PGBACKREST_GUIDE.md       - pgBackRest configuration and operation
+BACKUP_GUIDE.md           - pg_dumpall backup strategy
+EXAMPLES.sh               - Ready-to-use helm/kubectl commands
+QUICK_REFERENCE.txt       - This file
+
+
+✅ PRODUCTION DEPLOYMENT CHECKLIST
+═════════════════════════════════════════════════════════════════════════════════
+
+□ Set strong database password
+□ Configure S3 bucket for backups
+□ Set appropriate storage size (persistence.size)
+□ Configure resource limits (CPU, memory)
+□ Enable pgBackRest for backup/recovery
+□ Test backup and recovery procedures
+□ Set up monitoring and alerting
+□ Configure log aggregation
+□ Document recovery procedures
+□ Schedule backup verification jobs
+□ Plan disaster recovery strategy
+□ Set retention policies
+□ Test failover procedures
+
+
+📞 HELPFUL LINKS
+═════════════════════════════════════════════════════════════════════════════════
+
+PostgreSQL Documentation:     https://www.postgresql.org/docs/
+pgBackRest Documentation:     https://pgbackrest.org/
+Kubernetes Documentation:     https://kubernetes.io/docs/
+Helm Documentation:           https://helm.sh/docs/
+AWS S3 Documentation:         https://docs.aws.amazon.com/s3/
+
+
+🎯 VERSION INFO
+═════════════════════════════════════════════════════════════════════════════════
+
+Chart Version:       0.1.0
+PostgreSQL Version:  15.0
+Kubernetes:          1.20+
+Helm:                3.0+
+Created:             December 18, 2025
+

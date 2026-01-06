@@ -1,0 +1,15 @@
+apiVersion: v2
+name: postgresql
+description: A Helm chart for deploying PostgreSQL on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "15.0"
+keywords:
+  - postgresql
+  - database
+maintainers:
+  - name: DevOps Team
+    email: devops@example.com
+home: https://www.postgresql.org/
+sources:
+  - https://github.com/example/postgresql-helm-chart

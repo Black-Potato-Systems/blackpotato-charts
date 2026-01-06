@@ -1,0 +1,129 @@
+{{- if and .Values.backup.enabled .Values.backup.s3.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "postgresql.fullname" . }}-backup
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.fullBackupSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "postgresql.selectorLabels" . | nindent 12 }}
+            job: backup
+        spec:
+          serviceAccountName: {{ include "postgresql.fullname" . }}-backup
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            fsGroup: 999
+          
+          containers:
+          - name: postgresql-backup
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            
+            envFrom:
+            - secretRef:
+                name: {{ include "postgresql.fullname" . }}-s3-credentials
+            
+            env:
+            - name: PGHOST
+              value: {{ include "postgresql.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            - name: PGPORT
+              value: {{ .Values.service.port | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.fullname" . }}
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.fullname" . }}
+                  key: password
+            - name: COMPRESSION_LEVEL
+              value: {{ .Values.backup.compressionLevel | quote }}
+            - name: BACKUP_SCRIPT
+              value: /scripts/backup.sh
+            
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Starting PostgreSQL backup..."
+              
+              # Create timestamp for backup file
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              BACKUP_FILE="postgresql_backup_${TIMESTAMP}.sql.gz"
+              
+              # Run pg_dumpall and compress
+              echo "Running pg_dumpall..."
+              pg_dumpall -h $PGHOST -p $PGPORT -U $PGUSER | gzip -{{ .Values.backup.compressionLevel }} > /tmp/${BACKUP_FILE}
+              
+              echo "Backup file size: $(du -h /tmp/${BACKUP_FILE} | cut -f1)"
+              
+              # Upload to S3
+              echo "Uploading to S3..."
+              apt-get update -qq && apt-get install -y -qq awscli > /dev/null 2>&1
+              
+              S3_PATH="s3://${S3_BUCKET}/${S3_PREFIX}/${TIMESTAMP}/${BACKUP_FILE}"
+              
+              {{- if .Values.backup.s3.endpoint }}
+              aws s3 cp /tmp/${BACKUP_FILE} ${S3_PATH} \
+                --endpoint-url {{ .Values.backup.s3.endpoint }} \
+                --region ${AWS_DEFAULT_REGION} \
+                --sse AES256
+              {{- else }}
+              aws s3 cp /tmp/${BACKUP_FILE} ${S3_PATH} \
+                --region ${AWS_DEFAULT_REGION} \
+                --sse AES256
+              {{- end }}
+              
+              echo "Backup uploaded successfully to ${S3_PATH}"
+              
+              # Cleanup local backup file
+              rm -f /tmp/${BACKUP_FILE}
+              
+              # Cleanup old backups (retention policy)
+              echo "Cleaning up backups older than {{ .Values.backup.retentionDays }} days..."
+              aws s3 ls s3://${S3_BUCKET}/${S3_PREFIX}/ --recursive \
+                {{- if .Values.backup.s3.endpoint }}
+                --endpoint-url {{ .Values.backup.s3.endpoint }} \
+                {{- end }}
+                --region ${AWS_DEFAULT_REGION} | while read -r line; do
+                  create_date=$(echo $line | awk {'print $1" "$2'})
+                  create_date_timestamp=$(date -d "$create_date" +%s)
+                  now_timestamp=$(date +%s)
+                  days_old=$(( ($now_timestamp - $create_date_timestamp) / 86400 ))
+                  file_path=$(echo $line | awk {'print $4'})
+                  if [ $days_old -gt {{ .Values.backup.retentionDays }} ]; then
+                    echo "Deleting old backup (${days_old} days old): ${file_path}"
+                    aws s3 rm s3://${S3_BUCKET}/${file_path} \
+                      {{- if .Values.backup.s3.endpoint }}
+                      --endpoint-url {{ .Values.backup.s3.endpoint }} \
+                      {{- end }}
+                      --region ${AWS_DEFAULT_REGION}
+                  fi
+              done
+              
+              echo "Backup job completed successfully!"
+            
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 1Gi
+              requests:
+                cpu: 500m
+                memory: 512Mi
+          
+          restartPolicy: OnFailure
+          backoffLimit: 3
+{{- end }}
